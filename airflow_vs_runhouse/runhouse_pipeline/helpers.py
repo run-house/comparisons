@@ -160,6 +160,14 @@ def forecast_wt_arima_for_date(input_date, model_ref, test_dataset_ref):
 
 
 # ------------------------ Helper Functions ------------------------
+# ------------------------------------------------------------------
+def load_raw_data():
+    # Load in the raw data from local folder
+    data_path = os.path.join(os.getcwd(), 'data', 'daily_minimum_temp.csv')
+    raw_df = pd.read_csv(data_path, error_bad_lines=False)
+    return raw_df
+
+
 def calculate_mape(y, yhat):
     """
     Calculates Mean Average Percentage Error.
@@ -191,10 +199,3 @@ def calculate_rmse(y, yhat):
     rmse = sum(error_sqr_rooted) / len(error_sqr_rooted)
 
     return rmse
-
-
-def load_raw_data():
-    # Load in the raw data from local folder
-    data_path = os.path.join(os.getcwd(), 'data', 'raw_data', 'daily_minimum_temp.csv')
-    raw_df = pd.read_csv(data_path, error_bad_lines=False)
-    return raw_df
