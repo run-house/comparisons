@@ -2,7 +2,7 @@ import pickle
 
 import runhouse as rh
 
-from runhouse_pipeline.helpers import preprocess_raw_data, split_data, fit_and_save_model, predict_test_wt_arima, \
+from airflow_vs_runhouse.runhouse_pipeline.helpers import preprocess_raw_data, split_data, fit_and_save_model, predict_test_wt_arima, \
     measure_accuracy, forecast_wt_arima_for_date, load_raw_data
 
 
