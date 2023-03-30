@@ -83,13 +83,9 @@ def predict_test_wt_arima(test_dataset_ref):
 
     fitted, confint = model.predict(n_periods=len(test_df), return_conf_int=True)
 
-    predicted_test = pd.merge(
-        pd.DataFrame(fitted), pd.DataFrame(confint), right_index=True, left_index=True)
-
-    predicted_test = predicted_test.rename(index=str,
-                                           columns={'0_x': 'yhat',
-                                                    '0_y': 'yhat_lower',
-                                                    1: 'yhat_upper'})
+    f = pd.DataFrame(fitted, columns=['yhat']).reset_index(drop=True)
+    c = pd.DataFrame(confint, columns=['yhat_lower', 'yhat_upper']).reset_index(drop=True)
+    predicted_test = pd.concat([f, c], axis=1)
 
     predicted_test_obj = rh.blob(data=pickle.dumps(predicted_test), name="predicted_test").write().save()
 
@@ -108,9 +104,11 @@ def measure_accuracy(test_dataset_ref, predicted_test_ref):
     predicted_test_blob = rh.Blob.from_name(predicted_test_ref.name)
     predicted_test = pickle.loads(predicted_test_blob.data)
 
-    mape_test = calculate_mape(test_df['y'], predicted_test['yhat'])
+    y = pd.to_numeric(test_df['y']).reset_index(drop=True)
+    yhat = pd.to_numeric(predicted_test['yhat']).reset_index(drop=True)
 
-    rmse_test = calculate_rmse(test_df['y'], predicted_test['yhat'])
+    mape_test = calculate_mape(y, yhat)
+    rmse_test = calculate_rmse(y, yhat)
 
     days_in_test = len(test_df)
 
@@ -124,46 +122,11 @@ def measure_accuracy(test_dataset_ref, predicted_test_ref):
     return accuracy_obj
 
 
-def forecast_wt_arima_for_date(input_date, model_ref, test_dataset_ref):
-    """
-    :param input_date: A date as a string in ISO format (yyyy-mm-dd).
-    :return: Dictionary with the forecasted values.
-            `yhat`: Forecasted value for given date.
-            `yhat_upper`: Forecasted upper value for given date & confidence intervals.
-            `yhat_lower`: Forecasted lower value for given date & confidence intervals.
-    """
-    print(f"Computing forecast for {input_date}")
-
-    model_blob = rh.Blob.from_name(model_ref.name)
-    model = pickle.loads(model_blob.data)
-
-    test_blob = rh.Blob.from_name(test_dataset_ref.name)
-    test_df = pickle.loads(test_blob.data)
-
-    min_test_date = pd.to_datetime(test_df.index.min())
-
-    date_diff = pd.to_datetime(input_date) - min_test_date
-
-    fitted, confint = model.predict(n_periods=date_diff.days, return_conf_int=True)
-
-    forecast_results = pd.merge(
-        pd.DataFrame(fitted), pd.DataFrame(confint), right_index=True, left_index=True)
-
-    forecast_results = forecast_results.rename(
-        index=str, columns={'0_x': 'yhat', '0_y': 'yhat_upper', 1: 'yhat_lower'})
-
-    final_forecast = forecast_results[-1:]
-    final_forecast['Date'] = input_date
-    final_forecast = final_forecast.set_index('Date')
-
-    return final_forecast.to_dict('index')[input_date]
-
-
 # ------------------------ Helper Functions ------------------------
 # ------------------------------------------------------------------
 def load_raw_data():
     # Load in the raw data from local folder
-    data_path = os.path.join(os.getcwd(), 'data', 'daily_minimum_temp.csv')
+    data_path = os.path.join(os.getcwd(), 'raw_data', 'daily_minimum_temp.csv')
     raw_df = pd.read_csv(data_path, error_bad_lines=False)
     return raw_df
 
@@ -176,14 +139,11 @@ def calculate_mape(y, yhat):
     :return: MAPE as percentage
     """
 
-    y = y.replace(0, np.nan)
-
     error_daily = y - yhat
     abs_daily_error = list(map(abs, error_daily))
     relative_abs_daily_error = abs_daily_error / y
 
     mape = (np.nansum(relative_abs_daily_error) / np.sum(~np.isnan(y))) * 100
-
     return mape
 
 

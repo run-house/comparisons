@@ -2,8 +2,8 @@ import pickle
 
 import runhouse as rh
 
-from airflow_vs_runhouse.runhouse_pipeline.helpers import preprocess_raw_data, split_data, fit_and_save_model, predict_test_wt_arima, \
-    measure_accuracy, forecast_wt_arima_for_date, load_raw_data
+from airflow_vs_runhouse.runhouse_pipeline.helpers import preprocess_raw_data, split_data, fit_and_save_model, \
+    predict_test_wt_arima, measure_accuracy, load_raw_data
 
 
 # Based on Delivery Hero Airflow ML Workshop
@@ -22,7 +22,10 @@ def preprocessing_and_data_split(raw_df, cpu):
     # Run the data splitting on the cluster, which returns a remote reference to the train + test data on the cluster
     split_data_on_cpu = rh.function(name="split_data", fn=split_data, system=cpu).save()
     train_data_ref, test_data_ref = split_data_on_cpu(preprocessed_dataset_ref=dataset_ref_on_cpu)
-    print(f"Saved on cluster train data to path: {train_data_ref.path} and test data to path: {test_data_ref.path}")
+
+    print(f"Saved train data to path: {train_data_ref.path} on the cluster")
+    print(f"Saved test data to path: {test_data_ref.path} on the cluster")
+
     return train_data_ref, test_data_ref
 
 
@@ -34,7 +37,7 @@ def model_training(gpu, train_data_ref, test_data_ref):
     print(f"Saved model on cluster to path: {model_ref.path}")
 
     predict_test_on_gpu = rh.function(fn=predict_test_wt_arima, system=gpu, reqs=["pmdarima"]).save()
-    test_predictions_ref = predict_test_on_gpu(test_data_ref=test_data_ref)
+    test_predictions_ref = predict_test_on_gpu(test_dataset_ref=test_data_ref)
     print(f"Saved test data predictions on cluster to path: {test_predictions_ref.path}")
 
     return model_ref, test_predictions_ref
@@ -49,11 +52,11 @@ def run_pipeline():
     and dependencies required to run. For the preprocessing stage, we provision a 32 CPU cluster to handle
     running the preprocessing and data splitting stages.
 
-    For the model fitting and predict stages, we provision a GPU (in this case an A10G) where for our Runhouse
+    For the model fitting and predict stages, we provision a GPU (in this case an A10G) for our Runhouse
     microservices to live.
 
     Notice how we pass object refs between each of the microservices - this is to prevent having to bounce around data
-    between the cluster and the local env.
+    between the local env and the cluster.
     """
     # Launch a new cluster (with 32 CPUs) to handle loading and processing of the dataset
     cpu = rh.cluster(name="^rh-32-cpu").up_if_not().save()
@@ -64,15 +67,10 @@ def run_pipeline():
     # Launch a new cluster (with a GPU) to handle model training
     gpu = rh.cluster(name='rh-a10x') if rh.exists('rh-a10x') else rh.cluster(name='rh-a10x',
                                                                              instance_type='A10:1').up_if_not()
-
     model_ref, test_predictions_ref = model_training(gpu, train_data_ref, test_data_ref)
     accuracy_on_gpu = rh.function(fn=measure_accuracy, system=gpu, reqs=["pmdarima"]).save()
     accuracy_ref = accuracy_on_gpu(test_dataset_ref=test_data_ref, predicted_test_ref=test_predictions_ref)
     print(f"Accuracy: {pickle.loads(accuracy_ref.data)}")
-
-    # To run a forecast on a particular date, replace `input_date` with date as a string in ISO format (yyyy-mm-dd).
-    forecast_on_gpu = rh.function(fn=forecast_wt_arima_for_date, system=gpu, reqs=["pmdarima"])
-    print(forecast_on_gpu(input_date="2023-03-23", model_ref=model_ref, test_data_ref=test_data_ref))
 
 
 if __name__ == "__main__":
