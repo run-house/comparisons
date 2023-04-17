@@ -48,8 +48,7 @@ def split_data(preprocessed_dataset_ref, n_weeks_to_test=2):
 
 def fit_and_save_model(train_dataset_ref):
     """
-    Runs Prophet for the train dataframe. It reads data from the cluster and saves the model
-    object to the cluster.
+    Runs model training and saves the resulting model blob on the cluster.
     """
     train_blob = rh.Blob.from_name(train_dataset_ref.name)
     train_df = pickle.loads(train_blob.data)
