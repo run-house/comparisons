@@ -6,8 +6,8 @@ from airflow_vs_runhouse.runhouse_pipeline.helpers import preprocess_raw_data, s
     predict_test_wt_arima, measure_accuracy, load_raw_data
 
 
-# Based on Delivery Hero Airflow ML Workshop
-# https://github.com/deliveryhero/pyconde2019-airflow-ml-workshop
+# Based on Delivery Hero Airflow ML Workshop, specifically the training_pipeline.py DAG
+# https://github.com/deliveryhero/pyconde2019-airflow-ml-workshop/blob/master/dags/training_pipeline.py
 
 
 def preprocessing_and_data_split(raw_df, cpu):
@@ -29,7 +29,7 @@ def preprocessing_and_data_split(raw_df, cpu):
     return train_data_ref, test_data_ref
 
 
-def model_training(gpu, train_data_ref, test_data_ref):
+def model_training(gpu, train_data, test_data):
     train_model_on_gpu = rh.function(fn=fit_and_save_model, system=gpu, reqs=["pmdarima"]).save()
 
     # Send the SkyPilot ssh keys to the gpu cluster because we're streaming in the train / test data directly
@@ -37,14 +37,14 @@ def model_training(gpu, train_data_ref, test_data_ref):
     train_model_on_gpu.send_secrets()
 
     # Run the training on the cluster
-    model_ref = train_model_on_gpu(train_dataset_ref=train_data_ref)
-    print(f"Saved model on cluster to path: {model_ref.path}")
+    model = train_model_on_gpu(train_dataset_ref=train_data)
+    print(f"Saved model on cluster to path: {model.path}")
 
-    predict_test_on_gpu = rh.function(fn=predict_test_wt_arima, system=gpu, reqs=["pmdarima"]).save()
-    test_predictions_ref = predict_test_on_gpu(test_dataset_ref=test_data_ref)
-    print(f"Saved test data predictions on cluster to path: {test_predictions_ref.path}")
+    predict_on_gpu = rh.function(fn=predict_test_wt_arima, system=gpu, reqs=["pmdarima"]).save()
+    test_predictions = predict_on_gpu(test_dataset_ref=test_data)
+    print(f"Saved test data predictions on cluster to path: {test_predictions.path}")
 
-    return model_ref, test_predictions_ref
+    return model, test_predictions
 
 
 def run_pipeline():
@@ -65,23 +65,23 @@ def run_pipeline():
     between our local env and the clusters.
     """
     # Launch a new cluster (with 32 CPUs) to handle loading and processing of the dataset
-    cpu = rh.cluster(name="^rh-32-cpu").up_if_not().save()
+    cpu = rh.cluster(name="^rh-32-cpu").up_if_not()
 
     raw_df = load_raw_data()
-    train_data_ref, test_data_ref = preprocessing_and_data_split(raw_df, cpu)
+    train_data, test_data = preprocessing_and_data_split(raw_df, cpu)
 
     # Launch a new instance (with a GPU) to handle model training
-    gpu = rh.cluster(name='rh-a10x', instance_type='A100:1').up_if_not().save()
+    gpu = rh.cluster(name='rh-a10x', instance_type='A100:1', provider="cheapest").up_if_not()
 
     # If using AWS:
     # gpu = rh.cluster(name='rh-a10x', instance_type='g5.2xlarge', provider='aws').up_if_not().save()
 
-    model_ref, test_predictions_ref = model_training(gpu, train_data_ref, test_data_ref)
-    print(f"Saved model on gpu to path: {model_ref.path}")
+    trained_model, test_predictions = model_training(gpu, train_data, test_data)
+    print(f"Saved model on gpu to path: {trained_model.path}")
 
     accuracy_on_gpu = rh.function(fn=measure_accuracy, system=gpu, reqs=["pmdarima"]).save()
-    accuracy_ref = accuracy_on_gpu(test_dataset_ref=test_data_ref, predicted_test_ref=test_predictions_ref)
-    print(f"Accuracy\n: {pickle.loads(accuracy_ref.data)}")
+    accuracy = accuracy_on_gpu(test_dataset_ref=test_data, predicted_test_ref=test_predictions)
+    print(f"Accuracy\n: {pickle.loads(accuracy.data)}")
 
 
 if __name__ == "__main__":

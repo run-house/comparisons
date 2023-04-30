@@ -39,15 +39,15 @@ def preprocess():
 
     # Calls the function async, leaves the result on the cluster, and gives us back a reference (Ray ObjectRef)
     # to the object that we can then pass to other functions on the cluster, and they'll auto-resolve to our object.
-    yelp_train_ref = remote_load_dataset.remote("yelp_review_full", split='train[:10%]')
-    yelp_test_ref = remote_load_dataset.remote("yelp_review_full", split='test[:10%]')
+    yelp_train = remote_load_dataset.remote("yelp_review_full", split='train[:10%]')
+    yelp_test = remote_load_dataset.remote("yelp_review_full", split='test[:10%]')
 
-    # converts the table's file references to sftp file references without copying it
-    preprocessed_yelp_train = preproc(yelp_train_ref, stream_logs=True)
-    preprocessed_yelp_test = preproc(yelp_test_ref, stream_logs=True)
+    # converts the table's file references to remote file references without bouncing the data back to our laptop
+    preprocessed_yelp_train = preproc(yelp_train, stream_logs=True)
+    preprocessed_yelp_test = preproc(yelp_test, stream_logs=True)
 
-    preprocessed_yelp_train.write().save(name="preprocessed-yelp-train", overwrite=True)
-    preprocessed_yelp_test.write().save(name="preprocessed-yelp-test", overwrite=True)
+    preprocessed_yelp_train.write().save(name="preprocessed-yelp-train")
+    preprocessed_yelp_test.write().save(name="preprocessed-yelp-test")
 
 
 def training():
@@ -62,7 +62,7 @@ def training():
                            load_secrets=True,
                            name='finetune_ddp_1gpu').save()
 
-    # Send get_model and get_optimizer to the cluster so we can call .remote and instantiate them on the cluster
+    # Send get_model and get_optimizer to the cluster so we can call .remote() and instantiate them on the cluster
     model_on_gpu = rh.function(fn=get_model, system=gpu, dryrun=True)
     optimizer_on_gpu = rh.function(fn=get_optimizer, system=gpu, dryrun=True)
 
