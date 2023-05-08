@@ -2,21 +2,21 @@ import sys
 from urllib.parse import urlparse
 
 import mlflow
-import pandas as pd
 import runhouse as rh
 
 
 def re_run_training(alpha, l1_ratio):
+    """Once resources have been saved via Runhouse, we can easily re-run the whole training pipeline
+    (ex: with new alpha or l1 ratio)"""
+
     with rh.run(name="re-running_training"):
         table = rh.Table.from_name("raw_data")
-        data: pd.DataFrame = table.fetch()
-
-        fit_model = rh.Function.from_name("fit_model")
 
         split_data = rh.Function.from_name(name="split_data")
-        train, test, train_x, train_y, test_x, test_y = split_data(data)
+        train, test, train_x, train_y, test_x, test_y = split_data(table)
 
         # Run the model fitting on the cpu cluster
+        fit_model = rh.Function.from_name("fit_model")
         lr = fit_model(alpha, l1_ratio, train_x, train_y)
 
         make_predictions = rh.Function.from_name(name="make_predictions")
@@ -26,9 +26,9 @@ def re_run_training(alpha, l1_ratio):
         (rmse, mae, r2) = eval_metrics(test_y, predicted_qualities)
 
         print("Elasticnet model (alpha={:f}, l1_ratio={:f}):".format(alpha, l1_ratio))
-        print("  RMSE: %s" % rmse)
-        print("  MAE: %s" % mae)
-        print("  R2: %s" % r2)
+        print("RMSE: %s" % rmse)
+        print("MAE: %s" % mae)
+        print("R2: %s" % r2)
 
         mlflow.log_param("alpha", alpha)
         mlflow.log_param("l1_ratio", l1_ratio)
