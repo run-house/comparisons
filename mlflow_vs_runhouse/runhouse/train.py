@@ -61,7 +61,6 @@ def load_and_save_data():
         raise e
 
     # Save the data to a bucket in S3
-    # TODO [JL] create table object using github URL from above
     table = rh.table(data=data, name="raw_data", system="s3").write().save()
     print(f"Saved table to s3 in path: {table.path}")
 
