@@ -1,6 +1,6 @@
 import warnings
 import sys
-
+import time
 import pandas as pd
 import numpy as np
 from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
@@ -17,20 +17,13 @@ logging.basicConfig(level=logging.WARN)
 logger = logging.getLogger(__name__)
 
 
-def eval_metrics(actual, pred):
-    rmse = np.sqrt(mean_squared_error(actual, pred))
-    mae = mean_absolute_error(actual, pred)
-    r2 = r2_score(actual, pred)
-    return rmse, mae, r2
-
-
-def fit_model(alpha, l1_ratio, train_x, train_y, random_state=42):
+def fit_model_on_training_data(alpha, l1_ratio, train_x, train_y, random_state=42):
     lr = ElasticNet(alpha=alpha, l1_ratio=l1_ratio, random_state=random_state)
     lr.fit(train_x, train_y)
     return lr
 
 
-def split_data(table_obj):
+def split_data_into_training_and_test(table_obj):
     """Split the data into training and test sets. (0.75, 0.25) split."""
     # This code will run on a cluster, so let's load the data here
     data = table_obj.fetch()
@@ -45,9 +38,16 @@ def split_data(table_obj):
     return train, test, train_x, train_y, test_x, test_y
 
 
-def make_predictions(lr, test_x):
+def make_test_predictions(lr, test_x):
     predicted_qualities = lr.predict(test_x)
     return predicted_qualities
+
+
+def eval_model(actual, pred):
+    rmse = np.sqrt(mean_squared_error(actual, pred))
+    mae = mean_absolute_error(actual, pred)
+    r2 = r2_score(actual, pred)
+    return rmse, mae, r2
 
 
 def load_and_save_data():
@@ -67,39 +67,37 @@ def load_and_save_data():
     return table
 
 
-if __name__ == "__main__":
-    warnings.filterwarnings("ignore")
-    np.random.seed(40)
-
-    alpha = float(sys.argv[1]) if len(sys.argv) > 1 else 0.5
-    l1_ratio = float(sys.argv[2]) if len(sys.argv) > 2 else 0.5
-
+def run_training(alpha, l1_ratio):
+    """Create a Run which splits the data, fits the model, makes predictions, and evaluates the model.
+    Each step in this workflow is run by calling into a microservice which lives on a cluster. Note
+    that we could just as easily provision a separate cluster (e.g. a GPU) for the model fitting or prediction steps,
+    but for this example we'll just use a CPU cluster for everything."""
     table: rh.Table = load_and_save_data()
 
     # Initialize a CPU cluster to hold each of the functions / microservices needed for training our model
     cpu = rh.cluster("^rh-cpu").up_if_not()
 
-    with rh.run(name="train_run"):
-        # Create a microservice for fitting the model on the cpu cluster
-        fit_model = rh.function(fn=fit_model, name="fit_model").to(cpu, reqs=['scikit-learn', 'mlflow',
-                                                                              'pandas<2.0.0']).save()
-
+    with rh.Run(name=f"train_run_{int(time.time())}") as r:
         # Create a microservice for splitting the data on the cpu cluster
-        split_data = rh.function(split_data, name="split_data").to(cpu, reqs=['scikit-learn', 'pandas<2.0.0',
-                                                                              's3fs']).save()
-
+        split_data = rh.function(split_data_into_training_and_test, name="split_data").to(cpu, reqs=['scikit-learn',
+                                                                                                     'pandas<2.0.0',
+                                                                                                     's3fs']).save()
         # Run the data splitting on the cluster
         train, test, train_x, train_y, test_x, test_y = split_data(table)
+
+        # Create a microservice for fitting the model on the cpu cluster
+        fit_model = rh.function(fn=fit_model_on_training_data, name="fit_model").to(cpu, reqs=['scikit-learn', 'mlflow',
+                                                                                               'pandas<2.0.0']).save()
 
         # Run the model fitting on the cpu cluster
         lr = fit_model(alpha, l1_ratio, train_x, train_y)
 
         # Create a microservice for making model predictions on the cpu cluster
-        make_predictions = rh.function(make_predictions, name="make_predictions").to(cpu).save()
+        make_predictions = rh.function(make_test_predictions, name="make_predictions").to(cpu).save()
         predicted_qualities = make_predictions(lr, test_x)
 
         # Create a microservice evaluating the model metrics, and have it live on the cpu cluster
-        eval_metrics = rh.function(eval_metrics, name="eval_metrics").to(cpu, reqs=['scikit-learn']).save()
+        eval_metrics = rh.function(eval_model, name="eval_metrics").to(cpu, reqs=['scikit-learn']).save()
         (rmse, mae, r2) = eval_metrics(test_y, predicted_qualities)
 
         print("Elasticnet model (alpha={:f}, l1_ratio={:f}):".format(alpha, l1_ratio))
@@ -124,3 +122,16 @@ if __name__ == "__main__":
             mlflow.sklearn.log_model(lr, "model", registered_model_name="ElasticnetWineModel")
         else:
             mlflow.sklearn.log_model(lr, "model")
+
+    # save this Run to Runhouse Den
+    r.save()
+
+
+if __name__ == "__main__":
+    warnings.filterwarnings("ignore")
+    np.random.seed(40)
+
+    alpha = float(sys.argv[1]) if len(sys.argv) > 1 else 0.5
+    l1_ratio = float(sys.argv[2]) if len(sys.argv) > 2 else 0.5
+
+    run_training(alpha, l1_ratio)

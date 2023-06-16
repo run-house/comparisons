@@ -1,4 +1,5 @@
 import sys
+import time
 from urllib.parse import urlparse
 
 import mlflow
@@ -7,22 +8,24 @@ import runhouse as rh
 
 def re_run_training(alpha, l1_ratio):
     """Once resources have been saved via Runhouse, we can easily re-run the whole training pipeline
-    (ex: with new alpha or l1 ratio)"""
+    (e.g. with new alpha or l1 ratio or an updated dataset)"""
 
-    with rh.run(name="re-running_training"):
-        table = rh.Table.from_name("raw_data")
+    with rh.Run(name=f"training_run_{int(time.time())}"):
+        # Note: Set dryrun to ``True`` when loading these resources as we do not need to re-instantiate anything
+        # If we were re-running these services on a different cluster, then we should not set dryrun to True
+        table = rh.table("raw_data", dryrun=True)
 
-        split_data = rh.Function.from_name(name="split_data")
+        split_data = rh.function(name="split_data", dryrun=True)
         train, test, train_x, train_y, test_x, test_y = split_data(table)
 
         # Run the model fitting on the cpu cluster
-        fit_model = rh.Function.from_name("fit_model")
+        fit_model = rh.function("fit_model", dryrun=True)
         lr = fit_model(alpha, l1_ratio, train_x, train_y)
 
-        make_predictions = rh.Function.from_name(name="make_predictions")
+        make_predictions = rh.function(name="make_predictions", dryrun=True)
         predicted_qualities = make_predictions(lr, test_x)
 
-        eval_metrics = rh.Function.from_name(name="eval_metrics")
+        eval_metrics = rh.function(name="eval_metrics", dryrun=True)
         (rmse, mae, r2) = eval_metrics(test_y, predicted_qualities)
 
         print("Elasticnet model (alpha={:f}, l1_ratio={:f}):".format(alpha, l1_ratio))
