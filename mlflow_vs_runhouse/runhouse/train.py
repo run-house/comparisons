@@ -35,7 +35,7 @@ def split_data_into_training_and_test(table_obj):
     train_y = train[["quality"]]
     test_y = test[["quality"]]
 
-    return train, test, train_x, train_y, test_x, test_y
+    return [train, test, train_x, train_y, test_x, test_y]
 
 
 def make_test_predictions(lr, test_x):
@@ -47,7 +47,7 @@ def eval_model(actual, pred):
     rmse = np.sqrt(mean_squared_error(actual, pred))
     mae = mean_absolute_error(actual, pred)
     r2 = r2_score(actual, pred)
-    return rmse, mae, r2
+    return [rmse, mae, r2]
 
 
 def load_and_save_data():
@@ -61,10 +61,10 @@ def load_and_save_data():
         raise e
 
     # Save the data to a bucket in S3
-    table = rh.table(data=data, name="raw_data", system="s3").write().save()
-    print(f"Saved table to s3 in path: {table.path}")
+    table_obj = rh.table(data=data, name="raw_data", system="s3").write().save()
+    print(f"Saved table to s3 in path: {table_obj.path}")
 
-    return table
+    return table_obj
 
 
 def run_training(alpha, l1_ratio):
@@ -76,9 +76,11 @@ def run_training(alpha, l1_ratio):
 
     # Initialize a CPU cluster to hold each of the functions / microservices needed for training our model
     cpu = rh.cluster("^rh-cpu").up_if_not()
+    cpu.restart_server()
 
     # Create a microservice for splitting the data on the cpu cluster
-    split_data = rh.function(split_data_into_training_and_test, name="split_data").to(cpu, reqs=['scikit-learn',
+    split_data = rh.function(split_data_into_training_and_test, name="split_data").to(cpu, reqs=['mlflow',
+                                                                                                 'scikit-learn',
                                                                                                  'pandas<2.0.0',
                                                                                                  's3fs']).save()
     # Run the data splitting on the cluster
@@ -97,7 +99,7 @@ def run_training(alpha, l1_ratio):
 
     # Create a microservice evaluating the model metrics, and have it live on the cpu cluster
     eval_metrics = rh.function(eval_model, name="eval_metrics").to(cpu, reqs=['scikit-learn']).save()
-    (rmse, mae, r2) = eval_metrics(test_y, predicted_qualities)
+    rmse, mae, r2 = eval_metrics(test_y, predicted_qualities)
 
     print("Elasticnet model (alpha={:f}, l1_ratio={:f}):".format(alpha, l1_ratio))
     print("RMSE: %s" % rmse)
