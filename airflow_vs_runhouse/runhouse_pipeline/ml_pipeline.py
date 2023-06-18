@@ -12,15 +12,14 @@ from airflow_vs_runhouse.runhouse_pipeline.helpers import preprocess_raw_data, s
 
 def preprocessing_and_data_split(raw_df, cpu):
     # Send the function for loading the dataset to the cluster along with the requirements it needs to run
-    preprocessed_data_on_cpu = rh.function(name="preprocess_data", fn=preprocess_raw_data, system=cpu,
-                                           reqs=["pmdarima"]).save()
+    preprocessed_data_on_cpu = rh.function(preprocess_raw_data, name="preprocess_data").to(cpu, env=["pmdarima"]).save()
 
     # Run the preprocessing on the cluster, which returns a remote reference to the dataset saved on the cluster
     dataset_ref_on_cpu = preprocessed_data_on_cpu(raw_df)
     print(f"Saved dataset on cluster to path: {dataset_ref_on_cpu.path}")
 
     # Run the data splitting on the cluster, which returns a remote reference to the train + test data on the cluster
-    split_data_on_cpu = rh.function(name="split_data", fn=split_data, system=cpu).save()
+    split_data_on_cpu = rh.function(split_data, name="split_data").to(cpu).save()
     train_data_ref, test_data_ref = split_data_on_cpu(preprocessed_dataset_ref=dataset_ref_on_cpu)
 
     print(f"Saved train data on the cluster to path: {train_data_ref.path}")
@@ -30,7 +29,7 @@ def preprocessing_and_data_split(raw_df, cpu):
 
 
 def model_training(gpu, train_data, test_data):
-    train_model_on_gpu = rh.function(fn=fit_and_save_model, system=gpu, reqs=["pmdarima"]).save()
+    train_model_on_gpu = rh.function(fn=fit_and_save_model, name="fit_and_save_model").to(gpu, env=["pmdarima"]).save()
 
     # Send the SkyPilot ssh keys to the gpu cluster because we're streaming in the train / test data directly
     # from the 32-cpu cluster
@@ -40,7 +39,7 @@ def model_training(gpu, train_data, test_data):
     model = train_model_on_gpu(train_dataset_ref=train_data)
     print(f"Saved model on cluster to path: {model.path}")
 
-    predict_on_gpu = rh.function(fn=predict_test_wt_arima, system=gpu, reqs=["pmdarima"]).save()
+    predict_on_gpu = rh.function(predict_test_wt_arima, name="ml_pipeline_predict").to(gpu, env=["pmdarima"]).save()
     test_predictions = predict_on_gpu(test_dataset_ref=test_data)
     print(f"Saved test data predictions on cluster to path: {test_predictions.path}")
 
@@ -79,7 +78,7 @@ def run_pipeline():
     trained_model, test_predictions = model_training(gpu, train_data, test_data)
     print(f"Saved model on gpu to path: {trained_model.path}")
 
-    accuracy_on_gpu = rh.function(fn=measure_accuracy, system=gpu, reqs=["pmdarima"]).save()
+    accuracy_on_gpu = rh.function(measure_accuracy, name="measure_accuracy").to(gpu, env=["pmdarima"]).save()
     accuracy = accuracy_on_gpu(test_dataset_ref=test_data, predicted_test_ref=test_predictions)
     print(f"Accuracy\n: {pickle.loads(accuracy.data)}")
 
