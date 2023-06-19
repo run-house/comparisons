@@ -1,3 +1,6 @@
 [submodule "airflow_vs_runhouse/airflow_pipeline/pyconde2019-airflow-ml-workshop"]
 	path = airflow_vs_runhouse/airflow_pipeline/pyconde2019-airflow-ml-workshop
 	url = https://github.com/deliveryhero/pyconde2019-airflow-ml-workshop.git
+[submodule "airflow/airflow_pipeline"]
+	path = airflow/airflow_pipeline
+	url = https://github.com/deliveryhero/pyconde2019-airflow-ml-workshop.git
