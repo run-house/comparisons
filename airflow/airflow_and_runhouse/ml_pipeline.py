@@ -15,7 +15,7 @@ from airflow.operators.python import PythonOperator
 from datasets import load_dataset
 import runhouse as rh
 
-from airflow_vs_runhouse.airflow_and_runhouse.helpers import tokenize_dataset, fine_tune_model, get_optimizer, get_model
+from airflow.airflow_and_runhouse.helpers import tokenize_dataset, fine_tune_model, get_optimizer, get_model
 
 dag = DAG("prediction_pipeline",
           description="ML Prediction Pipeline",
@@ -28,23 +28,20 @@ dag = DAG("prediction_pipeline",
 def preprocess():
     cpu = rh.cluster("^rh-32-cpu").up_if_not()
     preproc = rh.function(fn=tokenize_dataset,
-                          system=cpu,
-                          reqs=['local:./', 'datasets', 'transformers'],
-                          name="BERT_preproc_32cpu").save()
+                          env=['datasets', 'transformers'],
+                          name="BERT_preproc_32cpu").to(cpu).save()
 
     # Not being saved, just a helper here to load the dataset on the cluster instead of doing it locally
-    remote_load_dataset = rh.function(fn=load_dataset,
-                                      system=preproc.system,
-                                      dryrun=True)
+    remote_load_dataset = rh.function(fn=load_dataset, dryrun=True).to(preproc.system)
 
-    # Calls the function async, leaves the result on the cluster, and gives us back a reference (Ray ObjectRef)
-    # to the object that we can then pass to other functions on the cluster, and they'll auto-resolve to our object.
-    yelp_train = remote_load_dataset.remote("yelp_review_full", split='train[:10%]')
-    yelp_test = remote_load_dataset.remote("yelp_review_full", split='test[:10%]')
+    # Calls the function async, leaves the result on the cluster, and gives us back a Run object, which
+    # we can then pass to other functions on the cluster, and they'll auto-resolve to our object via a Ray ObjectRef
+    yelp_train_run = remote_load_dataset.run("yelp_review_full", split='train[:10%]')
+    yelp_test_run = remote_load_dataset.run("yelp_review_full", split='test[:10%]')
 
     # converts the table's file references to remote file references without bouncing the data back to our laptop
-    preprocessed_yelp_train = preproc(yelp_train, stream_logs=True)
-    preprocessed_yelp_test = preproc(yelp_test, stream_logs=True)
+    preprocessed_yelp_train = preproc(yelp_train_run.name)
+    preprocessed_yelp_test = preproc(yelp_test_run.name)
 
     preprocessed_yelp_train.write().save(name="preprocessed-yelp-train")
     preprocessed_yelp_test.write().save(name="preprocessed-yelp-test")
@@ -55,27 +52,23 @@ def training():
                                                                              instance_type='A10:1').up_if_not()
 
     # Load the preprocessed table we built in the preprocess task - we'll later stream the data directly on the cluster
-    preprocessed_yelp = rh.Table.from_name(name="preprocessed-yelp-train")
+    preprocessed_yelp = rh.table(name="preprocessed-yelp-train")
 
-    ft_model = rh.function(fn=fine_tune_model,
-                           system=gpu,
-                           load_secrets=True,
-                           name='finetune_ddp_1gpu').save()
+    ft_model = rh.function(fn=fine_tune_model, load_secrets=True,name='finetune_ddp_1gpu').to(gpu).save()
 
-    # Send get_model and get_optimizer to the cluster so we can call .remote() and instantiate them on the cluster
-    model_on_gpu = rh.function(fn=get_model, system=gpu, dryrun=True)
-    optimizer_on_gpu = rh.function(fn=get_optimizer, system=gpu, dryrun=True)
+    # Send get_model and get_optimizer to the cluster so we can call .run() and instantiate them on the cluster
+    model_on_gpu = rh.function(fn=get_model).to(gpu)
+    optimizer_on_gpu = rh.function(fn=get_optimizer).to(gpu)
 
     # Receive an object ref for the model and optimizer
-    bert_model = model_on_gpu.remote(num_labels=5, model_id='bert-base-cased')
-    adam_optimizer = optimizer_on_gpu.remote(model=bert_model, lr=5e-5)
+    bert_model_run = model_on_gpu.run(num_labels=5, model_id='bert-base-cased')
+    adam_optimizer_run = optimizer_on_gpu.run(model=bert_model_run.name, lr=5e-5)
 
-    trained_model = ft_model(bert_model,
-                             adam_optimizer,
+    trained_model = ft_model(bert_model_run.name,
+                             adam_optimizer_run.name,
                              preprocessed_yelp,
                              num_epochs=3,
-                             batch_size=32,
-                             stream_logs=True)
+                             batch_size=32)
 
     # Copy model from the cluster to s3 bucket, and save the model's metadata to Runhouse RNS for re-loading later
     trained_model.to('s3').save(name='yelp_fine_tuned_bert')
